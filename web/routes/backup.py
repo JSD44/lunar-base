@@ -40,6 +40,10 @@ def home(request: Request, message: str | None = None, error: str | None = None)
             "service_control_available": service_control.available(),
             "service_unit": service_control.UNIT_NAME,
             "app_version": config.APP_VERSION,
+            "shim_lunar_tear_ref": config.SHIM_LUNAR_TEAR_REF,
+            "shim_built_at": config.SHIM_BUILT_AT,
+            "other_lunar_tear_dirs": config.OTHER_LUNAR_TEAR_DIRS,
+            "lunar_tear_dir": config.LUNAR_TEAR_DIR,
         },
     )
 

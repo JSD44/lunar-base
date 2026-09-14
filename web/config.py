@@ -13,7 +13,7 @@ from pathlib import Path
 
 ROOT: Path = Path(__file__).resolve().parent.parent
 
-APP_VERSION: str = "2.0.0"
+APP_VERSION: str = "2.10.0"
 
 SETTINGS_FILE: Path = ROOT / ".lunar-base.json"
 
@@ -100,7 +100,27 @@ def detect_lunar_tear_dir() -> Path:
     return conventional.resolve()
 
 
+def other_lunar_tear_candidates(chosen: Path) -> list[Path]:
+    """Sibling directories that also look like a Lunar Tear install.
+
+    Surfaced on the Status page so a Docker deployment sitting next to a
+    source checkout (or any other stray install) doesn't silently receive
+    edits meant for a different database.
+    """
+    try:
+        siblings = sorted(
+            p for p in ROOT.parent.iterdir()
+            if p.is_dir() and p.resolve() != ROOT.resolve()
+        )
+    except OSError:
+        return []
+    resolved_chosen = chosen.resolve()
+    return [p.resolve() for p in siblings
+            if p.resolve() != resolved_chosen and looks_like_lunar_tear(p)]
+
+
 LUNAR_TEAR_DIR: Path = detect_lunar_tear_dir()
+OTHER_LUNAR_TEAR_DIRS: list[Path] = other_lunar_tear_candidates(LUNAR_TEAR_DIR)
 
 # Detect structure: source build (server/) or prebuilt (flat)
 def _find_db_path() -> Path:
@@ -149,6 +169,12 @@ NAMES_DIR: Path = DATA_DIR / "names"
 GRANT_EXE_PATH: Path = (
     ROOT / "tools" / "grant" / ("grant.exe" if sys.platform == "win32" else "grant")
 )
+
+# Recorded by start-lunar-base.py's --rebuild-shim flow so a mismatch is
+# visible on the Status page instead of only showing up as a silent
+# wrong-item bug at grant time.
+SHIM_LUNAR_TEAR_REF: str | None = _saved_setting("shim_lunar_tear_ref")
+SHIM_BUILT_AT: str | None = _saved_setting("shim_built_at")
 
 
 def find_master_data_bin() -> Path | None:

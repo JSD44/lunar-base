@@ -41,8 +41,33 @@
 
     <dt>Version</dt>
     <dd>{{ app_version }}</dd>
+
+    <dt>Grant shim built against</dt>
+    <dd>
+      {% if shim_lunar_tear_ref %}
+        <code>{{ shim_lunar_tear_ref }}</code>
+        {% if shim_built_at %}<span style="margin-left:12px;color:var(--fg-mid)">{{ shim_built_at }}</span>{% endif %}
+      {% else %}
+        <span style="color:var(--fg-mid)">unknown (not built by this Lunar Base yet)</span>
+      {% endif %}
+    </dd>
   </dl>
 </div>
+
+{% if other_lunar_tear_dirs %}
+<div class="panel panel-corners" style="margin-top:16px;border-color:var(--danger)">
+  <strong>Multiple Lunar Tear installs found side by side</strong>
+  <p style="margin:8px 0 4px">Using <code>{{ lunar_tear_dir }}</code>. Also found:</p>
+  <ul style="margin:0 0 4px;padding-left:18px">
+    {% for other in other_lunar_tear_dirs %}
+    <li><code>{{ other }}</code></li>
+    {% endfor %}
+  </ul>
+  <p style="margin:4px 0 0;color:var(--fg-mid)">If your server actually runs from one of these -- a Docker
+    deployment, or a separate source checkout kept for building the shim -- edits made here go to a
+    database it never reads. Point at the right one with <code>--lunar-tear PATH</code>.</p>
+</div>
+{% endif %}
 
 <h1 class="bracket-header">Operations</h1>
 <div class="panel">

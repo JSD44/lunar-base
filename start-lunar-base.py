@@ -9,7 +9,7 @@ Usage:
     python3 start-lunar-base.py
     python3 start-lunar-base.py --prefer-saved
     python3 start-lunar-base.py --host 0.0.0.0 --port 8888
-    python3 start-lunar-base.py --lunar-tear-ref v1.0.0
+    python3 start-lunar-base.py --lunar-tear-ref v1.0.2
 """
 
 from __future__ import annotations
@@ -20,11 +20,13 @@ import importlib.util
 import json
 import os
 import platform
+import re
 import shutil
 import subprocess
 import sys
 import time
 import tarfile
+from datetime import datetime
 import urllib.request
 import venv
 import zipfile
@@ -77,6 +79,27 @@ def _saved_setting(key: str):
         return None
 
 
+LUNAR_TEAR_CANDIDATES: list[Path] = []
+
+
+def _scan_lunar_tear_candidates() -> list[Path]:
+    """All sibling directories that look like a Lunar Tear install.
+
+    Used to warn when more than one exists -- e.g. a Docker deployment next
+    to a source checkout kept around for building the shim -- since picking
+    the wrong one silently means edits land in a database the running
+    server never reads.
+    """
+    try:
+        siblings = sorted(
+            item for item in ROOT.parent.iterdir()
+            if item.is_dir() and item.resolve() != ROOT.resolve()
+        )
+    except OSError:
+        siblings = []
+    return [s.resolve() for s in siblings if _looks_like_lunar_tear(s)]
+
+
 def detect_lunar_tear_dir(explicit: str | None = None) -> Path:
     """Locate the Lunar Tear install.
 
@@ -90,6 +113,9 @@ def detect_lunar_tear_dir(explicit: str | None = None) -> Path:
       4. the conventional sibling ../lunar-tear
       5. any sibling directory carrying Lunar Tear's marker files
     """
+    global LUNAR_TEAR_CANDIDATES
+    LUNAR_TEAR_CANDIDATES = _scan_lunar_tear_candidates()
+
     if explicit:
         return Path(explicit).expanduser().resolve()
 
@@ -107,19 +133,10 @@ def detect_lunar_tear_dir(explicit: str | None = None) -> Path:
     if _looks_like_lunar_tear(conventional):
         return conventional.resolve()
 
-    try:
-        siblings = sorted(
-            item for item in ROOT.parent.iterdir()
-            if item.is_dir() and item.resolve() != ROOT.resolve()
-        )
-    except OSError:
-        siblings = []
-
-    named = [s for s in siblings if "lunar" in s.name.lower() and "tear" in s.name.lower()]
-    for group in (named, siblings):
+    named = [s for s in LUNAR_TEAR_CANDIDATES if "lunar" in s.name.lower() and "tear" in s.name.lower()]
+    for group in (named, LUNAR_TEAR_CANDIDATES):
         for candidate in group:
-            if _looks_like_lunar_tear(candidate):
-                return candidate.resolve()
+            return candidate
 
     return conventional.resolve()
 
@@ -141,7 +158,7 @@ BUILD_DIR = ROOT / ".build"          # scratch space for source + Go toolchain
 CONFIG_FILE = CONFIG_FILE_PATH
 
 LUNAR_TEAR_REPO = "https://github.com/Walter-Sparrow/lunar-tear"
-DEFAULT_LT_REF = "v1.0.0"
+DEFAULT_LT_REF = "v1.0.2"
 
 DEFAULT_HOST = "127.0.0.1"
 DEFAULT_PORT = 8888
@@ -335,6 +352,18 @@ def check_lunar_tear() -> bool:
     if LUNAR_TEAR_DIR.name != "lunar-tear":
         say("Detected by its contents, not its name. Override with "
             "--lunar-tear PATH if this is the wrong folder.", "info")
+
+    others = [c for c in LUNAR_TEAR_CANDIDATES if c != LUNAR_TEAR_DIR.resolve()]
+    if others:
+        say(f"{len(others) + 1} Lunar Tear installs found side by side:", "warn")
+        say(f"    using  {LUNAR_TEAR_DIR}", "warn")
+        for other in others:
+            say(f"    also   {other}", "warn")
+        say("If your server actually runs from one of the others -- a Docker "
+            "deployment, or a separate source checkout kept for building the "
+            "shim, say -- edits made here will go to a database it never "
+            "reads.", "warn")
+        say("Point at the right one with --lunar-tear PATH.", "info")
 
     if GAME_DB_PATH.exists():
         say(f"Game database: {GAME_DB_PATH}", "ok")
@@ -801,6 +830,36 @@ def fetch_lunar_tear_source(ref: str) -> Path | None:
     return target
 
 
+def check_shim_compatibility(source_dir: Path) -> bool:
+    """Verify lunar-tear's BuildGranter matches what the shim source expects.
+
+    The signature gained a *masterdata.GameConfig parameter in v1.0.2. Our
+    shim passes it, so building against an older lunar-tear fails with a
+    compiler error that says nothing useful to a non-Go user. Check the
+    upstream signature first and explain the mismatch in one line.
+    """
+    handler = source_dir / "server" / "internal" / "questflow" / "handler.go"
+    try:
+        text = handler.read_text(encoding="utf-8")
+    except OSError:
+        return True          # can't tell; let the compiler decide
+
+    match = re.search(r"func BuildGranter\(([^)]*)\)", text)
+    if not match:
+        return True
+
+    params = [p for p in match.group(1).split(",") if p.strip()]
+    if len(params) >= 2:
+        return True
+
+    say("This Lunar Tear version is too old for this Lunar Base.", "err")
+    say(f"  {handler.name} declares BuildGranter with {len(params)} parameter; "
+        "this shim needs the 2-parameter form added in lunar-tear v1.0.2.", "info")
+    say("Either upgrade Lunar Tear to v1.0.2 or newer, or use Lunar Base "
+        "v2.0.0 with your current server.", "info")
+    return False
+
+
 def build_grant_shim(source_dir: Path, go_exe: Path, assume_yes: bool) -> bool:
     server_dir = source_dir / "server"
     cmd_dir = server_dir / "cmd" / "lunar-base-grant"
@@ -880,12 +939,20 @@ def ensure_grant_shim(args) -> bool:
         if source is None:
             return False
 
+    if not check_shim_compatibility(source):
+        return False
+
     go_exe = ensure_go(source / "server", args.yes)
     if go_exe is None:
         return False
 
     if not build_grant_shim(source, go_exe, args.yes):
         return False
+
+    cfg = load_config()
+    cfg["shim_lunar_tear_ref"] = args.lunar_tear_ref
+    cfg["shim_built_at"] = datetime.now().isoformat(timespec="seconds")
+    save_config(cfg)
 
     say("The shim matches the source version it was built from; rebuild it "
         "after upgrading Lunar Tear.", "info")
@@ -1191,12 +1258,14 @@ def main() -> int:
         if not ask_yes_no("Start Lunar Base anyway?", args.yes):
             return 1
 
-    save_config({
+    cfg = load_config()
+    cfg.update({
         "host": host,
         "port": port,
         "lunar_tear_ref": args.lunar_tear_ref,
         "lunar_tear_dir": str(LUNAR_TEAR_DIR),
     })
+    save_config(cfg)
 
     say()
     say("Startup", "info")

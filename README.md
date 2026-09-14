@@ -49,6 +49,8 @@ That indirection is the point. Writes go through the same code paths the game se
 
 **Go 1.25 or newer** — only when building from source. If Go is missing, the launcher offers to download an official toolchain into `.build/` without touching your system, and removes it afterwards.
 
+**Lunar Tear v1.0.2 or newer.** The grant shim compiles against lunar-tear's internal packages, and v1.0.2 changed one of the signatures it calls. If you're on an older server, use [Lunar Base v2.0.0](https://github.com/NMeliksah/lunar-base/releases/tag/v2.0.0) instead, or upgrade Lunar Tear first.
+
 **A Lunar Tear installation** with:
 
 - `db/game.db` — created when you first run the server
@@ -149,7 +151,7 @@ Then open **<http://127.0.0.1:8888>**.
 | `--no-service` | Skip the startup-service offer |
 | `--text-revision N` | Read English names from a specific asset revision |
 | `--rebuild-shim` | Discard the shim binary and build it again |
-| `--lunar-tear-ref TAG` | Lunar Tear version to build the shim from. Default `v1.0.0` |
+| `--lunar-tear-ref TAG` | Lunar Tear version to build the shim from. Default `v1.0.2` |
 
 ---
 
@@ -239,7 +241,9 @@ On Windows there is no equivalent, so restore is always the manual path.
 ./start-lunar-base.sh --rebuild-shim --lunar-tear-ref v1.2.0
 ```
 
-The shim is compiled against a specific version's internal code. A mismatched one may write rows the running server does not expect — which fails quietly rather than loudly, so it is worth doing as a matter of routine.
+The shim is compiled against a specific version's internal code. A mismatched one may write rows the running server does not expect — which fails quietly rather than loudly, so it is worth doing as a matter of routine. Before compiling, the launcher checks that the source you point it at actually has the signature this shim needs, and refuses with a one-line explanation instead of a wall of Go compiler output if it doesn't. The Status page shows which ref the current shim was last built against.
+
+**If you keep more than one Lunar Tear directory** — a Docker deployment alongside a separate source checkout used only for building the shim, for instance — the launcher warns on the Status page and at startup when it finds siblings that also look like a Lunar Tear install. Grants are applied to whichever one is currently selected; if that isn't the one your server actually reads from, the write still reports success but never reaches the game. Pass `--lunar-tear PATH` to pin the right one.
 
 ---
 
@@ -268,6 +272,9 @@ Expected without automatic server control. Stop Lunar Tear, restore, start it ag
 
 **The launcher cannot find Lunar Tear.**
 Point at it directly with `--lunar-tear /path/to/lunar-tear`. It looks for `db/`, `assets/`, `server/go.mod`, or a `wizard` binary, in either layout.
+
+**An editor reports success ("applied") but nothing changes in the game.**
+This is almost always two Lunar Tear directories confusing the auto-detection — for example a Docker deployment plus a separate `git clone` kept around for `--rebuild-shim`. Lunar Base writes to whichever one it picked, and if that isn't the one your server actually reads, the write is real but lands in a database nobody serves. Check the `Source:` path on the Save Data page against the `db` volume in your `docker-compose.yaml` (or wherever your server actually points), and check the Status page for a "multiple installs found" warning. Fix it with `--lunar-tear /path/to/the/one/your/server/uses`.
 
 ---
 
