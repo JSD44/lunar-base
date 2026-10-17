@@ -1,4 +1,3 @@
-
 # Stage 1: Compile the Lunar Tear grant helper
 FROM golang:1.25-bookworm AS grant-builder
 
@@ -59,11 +58,12 @@ COPY --from=grant-builder \
 # Startup script
 COPY docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 
-RUN chmod +x \
-    /usr/local/bin/docker-entrypoint.sh \
-    /opt/lunar-base/tools/grant/grant && \
-    mkdir -p /opt/lunar-base/data
+# Convert Windows CRLF line endings to Unix LF
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh && \
+    chmod +x /opt/lunar-base/tools/grant/grant
 
 EXPOSE 8888
 
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
+# Explicitly execute the script using the shell
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/docker-entrypoint.sh"]
