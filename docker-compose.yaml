@@ -1,0 +1,24 @@
+
+name: lunar-base
+
+services:
+  lunar-base:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: lunar-base:local
+    container_name: lunar-base
+    restart: unless-stopped
+    environment:
+      LUNAR_TEAR_DIR: /lunar-tear
+      LUNAR_TEAR_DEFAULT_GRPC_PORT: "${LUNAR_TEAR_DEFAULT_GRPC_PORT:-8003}"
+      PYTHONUNBUFFERED: "1"
+    ports:
+      - "${LUNAR_BASE_PORT:-8888}:8888"
+    volumes:
+      # Lunar Tear database (read/write)
+      - /path/to/lunar-tear/db:/lunar-tear/db
+      # Lunar Tear assets (read-only)
+      - /path/to/lunar-tear/assets:/lunar-tear/assets:ro
+      # Lunar Base persistent data
+      - /path/to/lunar-base/data:/opt/lunar-base/data
