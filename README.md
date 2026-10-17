@@ -1,8 +1,10 @@
-# Lunar Base
+# Lunar Base (AI Docker Fork)
 
 A browser-based management interface for someone who lives on the moon and manages The Cage. Sits alongside **lunar-tear** and lets you back up, restore, and edit the player database from a browser.
 
 > Web-based control panel for a [Lunar Tear](https://github.com/Walter-Sparrow/lunar-tear) private server. Runs on Linux and Windows.
+
+Disclaimer: This project was forked with AI to dockerize the project for personal use.
 
 ---
 
