@@ -197,6 +197,10 @@ BACKUP_RETENTION: int = 50
 HOST: str = "127.0.0.1"
 PORT: int = 8888
 
+LUNAR_TEAR_GRPC_HOST: str = (
+    os.getenv("LUNAR_TEAR_GRPC_HOST") or "127.0.0.1"
+)
+
 LUNAR_TEAR_DEFAULT_GRPC_PORT: int = int(
     os.getenv("LUNAR_TEAR_DEFAULT_GRPC_PORT", "8003")
 )

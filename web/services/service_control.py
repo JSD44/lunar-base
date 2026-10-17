@@ -130,6 +130,13 @@ def unavailable_reason() -> str:
 # --- port probing -----------------------------------------------------------
 
 def grpc_port() -> int:
+    # Explicit environment configuration takes priority
+    if os.getenv("LUNAR_TEAR_DEFAULT_GRPC_PORT"):
+        return config.LUNAR_TEAR_DEFAULT_GRPC_PORT
+
+    # Otherwise use existing wizard configuration logic
+    port = config.LUNAR_TEAR_DEFAULT_GRPC_PORT
+
     """The port lunar-tear listens on, from .wizard.json when readable."""
     port = config.LUNAR_TEAR_DEFAULT_GRPC_PORT
     if config.WIZARD_CONFIG_PATH.exists():
@@ -154,12 +161,14 @@ def grpc_port() -> int:
 
 
 def port_is_open(port: int, timeout: float = 0.5) -> bool:
-    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-    sock.settimeout(timeout)
     try:
-        return sock.connect_ex(("127.0.0.1", port)) == 0
-    finally:
-        sock.close()
+        with socket.create_connection(
+            (config.LUNAR_TEAR_GRPC_HOST, port),
+            timeout=timeout,
+        ):
+            return True
+    except (OSError, TimeoutError):
+        return False
 
 
 def _wait_for_port(port: int, want_open: bool, timeout: float) -> bool:
