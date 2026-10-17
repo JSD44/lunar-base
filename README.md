@@ -233,6 +233,38 @@ Environment=LUNAR_TEAR_UNIT=your-unit-name
 
 On Windows there is no equivalent, so restore is always the manual path.
 
+## Running it in Docker
+This repo ships with a `Dockerfile` and `docker-compose.yaml` that brings up the service. The container must have access to an existing Lunar Tear's database and assets.
+
+### 1. Clone the repository
+```
+git clone https://github.com/JSD44/lunar-base
+cd lunar-base
+```
+### 2. Configure storage and networking
+
+Edit `docker-compose.yaml` and replace the placeholder volume paths with your Lunar Tear directories:
+
+Database: `/path/to/lunar-tear/db` (read/write)
+
+Assets: `/path/to/lunar-tear/assets` (read-only)
+
+Lunar Base data: `/path/to/lunar-base/data` (persistent storage)
+
+If Lunar Tear runs in another container, configure `LUNAR_TEAR_GRPC_HOST` and `LUNAR_TEAR_DEFAULT_GRPC_PORT` to match its hostname and gRPC port. Both containers must be able to communicate over the Docker network.
+
+### 3. Build and start
+```
+docker compose up -d --build
+```
+Alternatively, build the image manually:
+```
+docker build -t lunar-base:local .
+```
+## 4. Access Lunar Base
+
+Open `http://localhost:8888` or `http://<docker-host-ip>:8888` in your browser.
+
 ---
 
 ## Upgrading Lunar Tear
