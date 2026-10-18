@@ -1,0 +1,8 @@
+# Optional automatic restore control. Use together with docker-compose.yaml.
+services:
+  lunar-base:
+    environment:
+      LUNAR_TEAR_CONTAINER: "${LUNAR_TEAR_CONTAINER:?Set LUNAR_TEAR_CONTAINER to the Lunar Tear gRPC container name or ID}"
+      LUNAR_TEAR_DOCKER_SOCKET: /var/run/docker.sock
+    volumes:
+      - "${LUNAR_TEAR_DOCKER_SOCKET:-/var/run/docker.sock}:/var/run/docker.sock"

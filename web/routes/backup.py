@@ -38,7 +38,7 @@ def home(request: Request, message: str | None = None, error: str | None = None)
             "game_db_path": config.GAME_DB_PATH,
             "lunar_tear_running": backup_service.detect_lunar_tear_running(),
             "service_control_available": service_control.available(),
-            "service_unit": service_control.UNIT_NAME,
+            "service_target": service_control.target_name(),
             "app_version": config.APP_VERSION,
             "shim_lunar_tear_ref": config.SHIM_LUNAR_TEAR_REF,
             "shim_built_at": config.SHIM_BUILT_AT,
@@ -67,7 +67,7 @@ def list_backups(request: Request, message: str | None = None, error: str | None
                 None if service_control.available()
                 else service_control.unavailable_reason()
             ),
-            "service_unit": service_control.UNIT_NAME,
+            "service_target": service_control.target_name(),
         },
     )
 

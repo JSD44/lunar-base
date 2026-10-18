@@ -196,7 +196,7 @@ Restoring a backup means replacing `game.db`, and that is only safe once the ser
 ./wizard --prefer-saved
 ```
 
-Lunar Base can do that dance for you instead — stop the server, wait for the database to actually be released, swap the file, start the server again — but only if **Lunar Tear itself is running as a systemd unit** that Lunar Base can manage. Most people just launch `./wizard` in a terminal, in which case there is no unit to control and the manual path above is what you get. Nothing is broken; the Save Data page will say `MANUAL` and tell you why.
+Lunar Base can do that dance for you instead — stop the server, wait for the database to actually be released, swap the file, start the server again — when **Lunar Tear itself is running as a systemd unit** that Lunar Base can manage. Docker deployments can instead control the gRPC container directly; see [Automatic server control in Docker](#automatic-server-control-in-docker). Most people just launch `./wizard` in a terminal, in which case there is no unit to control and the manual path above is what you get. Nothing is broken; the Save Data page will say `MANUAL` and tell you why.
 
 If you would like the automatic version, give Lunar Tear a unit of its own. Something like `/etc/systemd/system/lunar-tear.service`:
 
@@ -231,39 +231,113 @@ Name the unit `lunar-tear` and Lunar Base finds it automatically. If you prefer 
 Environment=LUNAR_TEAR_UNIT=your-unit-name
 ```
 
-On Windows there is no equivalent, so restore is always the manual path.
+Native Windows installations use the manual restore path. Docker installations use the container control option below.
 
 ## Running it in Docker
-This repo ships with a `Dockerfile` and `docker-compose.yaml` that brings up the service. The container must have access to an existing Lunar Tear's database and assets.
+
+The repository includes a `Dockerfile` and `docker-compose.yaml`. You need an existing Lunar Tear installation with a database and game assets.
 
 ### 1. Clone the repository
-```
+
+```bash
 git clone https://github.com/JSD44/lunar-base
 cd lunar-base
 ```
+
 ### 2. Configure storage and networking
 
-Edit `docker-compose.yaml` and replace the placeholder volume paths with your Lunar Tear directories:
+Edit the volume paths in `docker-compose.yaml`:
 
-Database: `/path/to/lunar-tear/db` (read/write)
+| Host directory | Container directory | Access |
+|---|---|---|
+| `/path/to/lunar-tear/db` | `/lunar-tear/db` | Read/write |
+| `/path/to/lunar-tear/assets` | `/lunar-tear/assets` | Read-only |
+| `/path/to/lunar-base/data` | `/opt/lunar-base/data` | Read/write, persistent backups and extracted data |
 
-Assets: `/path/to/lunar-tear/assets` (read-only)
+Mount the **database directory**, rather than just `game.db`, so atomic restores and SQLite sidecar cleanup work. This must be the same database directory used by the Lunar Tear gRPC container.
 
-Lunar Base data: `/path/to/lunar-base/data` (persistent storage)
+If Lunar Tear runs in another container, attach Lunar Base to the same user-defined Docker network. For example, if the existing network is named `lunar-tear`, add these entries to `docker-compose.yaml` (keep the existing service settings):
 
-If Lunar Tear runs in another container, configure `LUNAR_TEAR_GRPC_HOST` and `LUNAR_TEAR_DEFAULT_GRPC_PORT` to match its hostname and gRPC port. Both containers must be able to communicate over the Docker network.
+```yaml
+services:
+  lunar-base:
+    networks:
+      - lunar-tear
+
+networks:
+  lunar-tear:
+    external: true
+    name: lunar-tear
+```
+
+Create a `.env` file beside `docker-compose.yaml` with the gRPC container's network name or alias and its **container port**:
+
+```dotenv
+LUNAR_TEAR_GRPC_HOST=lunar-tear-grpc
+LUNAR_TEAR_DEFAULT_GRPC_PORT=8003
+LUNAR_BASE_PORT=8888
+```
+
+Replace `lunar-tear-grpc` with the actual hostname. `127.0.0.1` inside Lunar Base refers to Lunar Base itself, so it cannot reach a separate gRPC container. The older `LUNAR_TEAR_DEFAULT_GRPC_HOST` Compose variable remains supported as a fallback.
 
 ### 3. Build and start
-```
+
+```bash
 docker compose up -d --build
 ```
-Alternatively, build the image manually:
-```
+
+This starts Lunar Base with manual server control. For automatic restores, use the additional configuration below.
+
+To build an image without starting Compose:
+
+```bash
 docker build -t lunar-base:local .
 ```
-## 4. Access Lunar Base
 
-Open `http://localhost:8888` or `http://<docker-host-ip>:8888` in your browser.
+The image builds the grant helper against Lunar Tear `v1.0.2` by default. Match your server version when needed:
+
+```bash
+docker compose build --build-arg LUNAR_TEAR_REF=v1.0.2
+```
+
+### 4. Access Lunar Base
+
+Open `http://localhost:8888` or `http://<docker-host-ip>:8888` in your browser. The port can be changed with `LUNAR_BASE_PORT`.
+
+### Automatic server control in Docker
+
+Lunar Base can stop the Lunar Tear gRPC container, restore a backup, and start that container again. It uses the Docker Engine API through a mounted Unix socket; systemd and the Docker CLI are not needed inside the image.
+
+1. Find the existing gRPC container's name with `docker ps --format '{{.Names}}'`.
+2. Add that name or container ID to the `.env` file:
+
+   ```dotenv
+   LUNAR_TEAR_CONTAINER=lunar-tear-grpc
+   ```
+
+   This identifies the container to control. `LUNAR_TEAR_GRPC_HOST` identifies where to probe its gRPC port; these values may differ when using a network alias. The Docker socket must belong to the daemon running this container.
+
+3. Enable the optional control configuration:
+
+   ```bash
+   docker compose -f docker-compose.yaml -f docker-compose.control.yaml up -d --build
+   ```
+
+   Use both `-f` arguments for subsequent Compose commands for this deployment. The override mounts `/var/run/docker.sock` and enables control of the selected container. For a rootless Docker daemon, set `LUNAR_TEAR_DOCKER_SOCKET` in `.env` to its host socket path, such as `/run/user/1000/docker.sock`; the override mounts it at `/var/run/docker.sock` inside Lunar Base. The Lunar Base process must have permission to access that socket.
+
+4. Check that the Status page shows **AUTOMATIC** and the expected Docker container. Close the game client, then restore from **Save Data** using the existing `RESTORE` confirmation.
+
+During restoration, Lunar Base verifies that Docker reports the container stopped and that the configured gRPC port is closed before taking a pre-restore snapshot and replacing the database. It restarts a previously running container and waits for its gRPC port to accept connections. A container that was already stopped stays stopped. If restoring fails after a successful stop, Lunar Base still attempts to restart the container; errors are displayed on the Save Data page. Check `docker logs <grpc-container>` if startup fails.
+
+Only the selected gRPC container is controlled. Ensure no other container or process writes to the same database during restoration. An external orchestrator must not restart the server while the restore is in progress. Docker's `unless-stopped` policy respects an explicit stop.
+
+> **Docker socket access grants broad control over the Docker host.** Lunar Base has no authentication, so enable this option only on a trusted deployment and restrict access to its web port. Mounting the socket read-only does not restrict Docker API operations. The socket is not mounted by the default Compose configuration.
+
+If Docker control is configured but the daemon, socket, or selected container cannot be inspected, restores are blocked because Lunar Base cannot verify that the server is stopped. Correct the socket/container configuration, or disable container control and stop the server manually. To return to manual control, recreate Lunar Base using only the base configuration:
+
+```bash
+docker compose -f docker-compose.yaml up -d --force-recreate
+```
 
 ---
 
@@ -302,7 +376,7 @@ Your asset dump is missing `assetbundle/text/en`. Both `revisions/<n>/assetbundl
 The asset tree is deeply nested and hits the 260-character limit. Keep the whole thing near the drive root — `C:\lunar\` rather than somewhere under `Documents` — or enable long path support.
 
 **Restore says the server is listening.**
-Expected without automatic server control. Stop Lunar Tear, restore, start it again. On Linux, installing the service (above) automates this.
+Expected without automatic server control. Stop Lunar Tear, restore, start it again. For a native Linux installation, configure the systemd service above. For Docker, enable [automatic container control](#automatic-server-control-in-docker).
 
 **The launcher cannot find Lunar Tear.**
 Point at it directly with `--lunar-tear /path/to/lunar-tear`. It looks for `db/`, `assets/`, `server/go.mod`, or a `wizard` binary, in either layout.

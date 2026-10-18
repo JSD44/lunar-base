@@ -12,8 +12,9 @@
   </p>
   {% if service_control_available %}
   <p style="margin-bottom:0;color:var(--fg-mid);font-size:13px">
-    Restoring stops <code>{{ service_unit }}.service</code>, waits for the
-    database to be released, swaps the save, and starts the server again.
+    Restoring stops <code>{{ service_target }}</code>, waits for the
+    database to be released, swaps the save, and starts the server again
+    if it was running. A stopped server stays stopped.
     Expect a few seconds of downtime; close the game client first.
   </p>
   {% endif %}
@@ -40,7 +41,7 @@
   <div class="banner error">&gt; Restore disabled :: {{ lunar_tear_running }}</div>
 {% elif lunar_tear_running and service_control_available %}
   <div class="banner">&gt; Game server is running. Restoring will stop
-    <code>{{ service_unit }}.service</code>, replace the save, and start it again.</div>
+    <code>{{ service_target }}</code>, replace the save, and start it again.</div>
 {% endif %}
 
 {% if not service_control_available and service_control_reason %}

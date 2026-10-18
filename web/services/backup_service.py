@@ -127,6 +127,12 @@ def detect_lunar_tear_running() -> str | None:
     Probes the gRPC port (8003 by default, or whatever .wizard.json says).
     Something listening means lunar-tear is almost certainly running.
     """
+    if service_control.CONTAINER_NAME:
+        try:
+            if service_control.is_active():
+                return f"{service_control.target_name()} is active. Stop it before restoring."
+        except service_control.ServiceError as exc:
+            return f"Cannot verify that the game server is stopped: {exc}"
     port = service_control.grpc_port()
     if service_control.port_is_open(port):
         return (f"lunar-tear gRPC server is listening on port {port}. "
@@ -193,9 +199,9 @@ def restore_backup(filename: str, manage_server: bool = False) -> RestoreResult:
     lunar-tear is listening.
 
     With `manage_server` True, perform the sequence by hand-rolling it:
-    stop the unit, wait for the port to close, snapshot, swap, start the
-    unit again. The server is restarted even if the swap fails, so a
-    failure never leaves the game server down.
+    stop the service/container, wait for the port to close, snapshot, swap,
+    then restart if previously active. A restart is attempted even if the
+    restore fails; startup errors are surfaced to the caller.
     """
     backup_path = (config.BACKUP_DIR / filename).resolve()
     if backup_path.parent != config.BACKUP_DIR.resolve():
@@ -222,14 +228,16 @@ def restore_backup(filename: str, manage_server: bool = False) -> RestoreResult:
     report = service_control.ServiceReport()
     was_active = service_control.is_active()
 
-    if was_active:
-        # Raises before anything is touched if the unit will not stop or
-        # the port stays open.
-        service_control.stop_and_wait(report)
-    else:
-        report.note("Server was already stopped")
-
     try:
+        if was_active:
+            # Stop and verify before touching the database. If stopping
+            # succeeds but verification fails, still attempt recovery.
+            service_control.stop_and_wait(report)
+        else:
+            report.note("Server was already stopped")
+            blocker = detect_lunar_tear_running()
+            if blocker:
+                raise RestoreBlocked(blocker)
         if config.GAME_DB_PATH.exists():
             create_backup(reason="pre-restore")
             report.note("Pre-restore snapshot taken")
@@ -239,7 +247,7 @@ def restore_backup(filename: str, manage_server: bool = False) -> RestoreResult:
         # Bring the server back up regardless of what happened above. The
         # swap is atomic, so on failure the old database is intact and
         # starting again is safe.
-        if was_active:
+        if was_active and report.stopped:
             service_control.start_and_wait(report)
 
     return RestoreResult(

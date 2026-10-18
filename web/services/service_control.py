@@ -1,4 +1,4 @@
-"""Control the lunar-tear system service from Lunar Base.
+"""Control the Lunar Tear systemd service or an explicitly selected container.
 
 Restoring a backup means copying a file over `game.db`, which is only safe
 once lunar-tear has released the database. Doing that by hand is
@@ -12,9 +12,9 @@ its point of view, which is not the same instant SQLite releases its file
 handles. Swapping the database out from under a process that still holds
 it open is the corruption case the whole restore guard exists to prevent.
 
-Everything here degrades gracefully: on Windows, in a container without
-systemd, or when the unit simply does not exist, `available()` returns
-False and the caller falls back to refusing the restore as before.
+Set LUNAR_TEAR_CONTAINER to opt into Docker control through a Unix socket.
+Otherwise the existing systemd backend is used. Docker state must confirm
+the container has stopped; a failed network probe alone cannot prove that.
 """
 
 from __future__ import annotations
@@ -26,6 +26,7 @@ import socket
 import subprocess
 import sys
 import time
+from contextlib import contextmanager
 from dataclasses import dataclass, field
 
 from web import config
@@ -33,6 +34,8 @@ from web import config
 
 # Unit name without the .service suffix. Override with LUNAR_TEAR_UNIT.
 UNIT_NAME: str = os.environ.get("LUNAR_TEAR_UNIT", "lunar-tear")
+CONTAINER_NAME: str = os.environ.get("LUNAR_TEAR_CONTAINER", "").strip()
+DOCKER_SOCKET: str = os.environ.get("LUNAR_TEAR_DOCKER_SOCKET", "/var/run/docker.sock")
 
 # How long to wait for the port to close after stop / open after start.
 STOP_TIMEOUT_S: float = 30.0
@@ -44,7 +47,7 @@ SETTLE_S: float = 1.0
 
 
 class ServiceError(Exception):
-    """Raised when a systemd operation fails."""
+    """Raised when a server control operation fails."""
 
 
 @dataclass
@@ -56,6 +59,46 @@ class ServiceReport:
 
     def note(self, message: str) -> None:
         self.steps.append(message)
+
+
+def target_name() -> str:
+    return f"Docker container {CONTAINER_NAME}" if CONTAINER_NAME else f"{UNIT_NAME}.service"
+
+
+# --- Docker plumbing --------------------------------------------------------
+
+@contextmanager
+def _docker_container():
+    # Lazy import keeps Docker optional for existing native installations.
+    try:
+        import docker
+        from requests.exceptions import RequestException
+    except ImportError as exc:
+        raise ServiceError("Docker control requires the docker Python package. Reinstall web/requirements.txt.") from exc
+
+    client = None
+    try:
+        client = docker.DockerClient(
+            base_url=f"unix://{DOCKER_SOCKET}", version="auto", timeout=60,
+        )
+        yield client.containers.get(CONTAINER_NAME)
+    except (docker.errors.DockerException, RequestException, OSError) as exc:
+        raise ServiceError(f"Could not control {target_name()} through {DOCKER_SOCKET}: {exc}") from exc
+    finally:
+        if client is not None:
+            client.close()
+
+
+def _container_active(container) -> bool:
+    state = container.attrs.get("State", {})
+    status = state.get("Status")
+    if status not in {"created", "running", "paused", "restarting", "removing", "exited", "dead"}:
+        raise ServiceError(f"Cannot determine the state of {target_name()}; refusing to restore.")
+    if status == "removing":
+        raise ServiceError(f"{target_name()} is being removed; refusing to restore.")
+    return status in {"running", "paused", "restarting"} or any(
+        state.get(key, False) for key in ("Running", "Paused", "Restarting")
+    )
 
 
 # --- systemd plumbing -------------------------------------------------------
@@ -96,11 +139,21 @@ def unit_exists() -> bool:
 
 
 def available() -> bool:
-    """True when this process can start and stop the lunar-tear unit."""
+    """True when the selected control backend can reach its target."""
+    if CONTAINER_NAME:
+        try:
+            with _docker_container() as container:
+                _container_active(container)
+            return True
+        except ServiceError:
+            return False
     return _systemctl() is not None and unit_exists()
 
 
 def is_active() -> bool:
+    if CONTAINER_NAME:
+        with _docker_container() as container:
+            return _container_active(container)
     prefix = _systemctl()
     if prefix is None:
         return False
@@ -113,6 +166,13 @@ def is_active() -> bool:
 
 def unavailable_reason() -> str:
     """Human-readable explanation of why automatic control is off."""
+    if CONTAINER_NAME:
+        try:
+            with _docker_container() as container:
+                _container_active(container)
+        except ServiceError as exc:
+            return str(exc)
+        return "Docker control is available."
     if sys.platform == "win32":
         return "Automatic server control needs systemd; this is Windows."
     if shutil.which("systemctl") is None:
@@ -130,14 +190,11 @@ def unavailable_reason() -> str:
 # --- port probing -----------------------------------------------------------
 
 def grpc_port() -> int:
+    """The configured gRPC port, falling back to the wizard configuration."""
     # Explicit environment configuration takes priority
     if os.getenv("LUNAR_TEAR_DEFAULT_GRPC_PORT"):
         return config.LUNAR_TEAR_DEFAULT_GRPC_PORT
 
-    # Otherwise use existing wizard configuration logic
-    port = config.LUNAR_TEAR_DEFAULT_GRPC_PORT
-
-    """The port lunar-tear listens on, from .wizard.json when readable."""
     port = config.LUNAR_TEAR_DEFAULT_GRPC_PORT
     if config.WIZARD_CONFIG_PATH.exists():
         try:
@@ -185,9 +242,24 @@ def _wait_for_port(port: int, want_open: bool, timeout: float) -> bool:
 def stop_and_wait(report: ServiceReport) -> None:
     """Stop lunar-tear and block until its port is closed.
 
-    Raises ServiceError if the unit will not stop or the port stays open,
+    Raises ServiceError if the target will not stop or the port stays open,
     so the caller aborts before touching the database.
     """
+    if CONTAINER_NAME:
+        report.note(f"Stopping {target_name()}")
+        with _docker_container() as container:
+            container.stop(timeout=int(STOP_TIMEOUT_S))
+            report.stopped = True
+            container.reload()
+            if _container_active(container):
+                raise ServiceError(f"{target_name()} is still active; refusing to replace the database.")
+        port = grpc_port()
+        if not _wait_for_port(port, want_open=False, timeout=STOP_TIMEOUT_S):
+            raise ServiceError(f"Port {port} is still accepting connections after stopping {target_name()}; refusing to replace the database.")
+        time.sleep(SETTLE_S)
+        report.note(f"Container stopped and port {port} closed; database is quiesced")
+        return
+
     prefix = _systemctl()
     if prefix is None:
         raise ServiceError(unavailable_reason())
@@ -217,6 +289,20 @@ def stop_and_wait(report: ServiceReport) -> None:
 
 def start_and_wait(report: ServiceReport) -> None:
     """Start lunar-tear and block until its port accepts connections."""
+    if CONTAINER_NAME:
+        report.note(f"Starting {target_name()}")
+        with _docker_container() as container:
+            container.start()
+            report.started = True
+        port = grpc_port()
+        if not _wait_for_port(port, want_open=True, timeout=START_TIMEOUT_S):
+            raise ServiceError(f"{target_name()} was started but port {port} is not listening after {START_TIMEOUT_S:.0f}s. Check: docker logs {CONTAINER_NAME}")
+        with _docker_container() as container:
+            if not _container_active(container):
+                raise ServiceError(f"{target_name()} exited after starting. Check its container logs.")
+        report.note(f"Port {port} listening again")
+        return
+
     prefix = _systemctl()
     if prefix is None:
         raise ServiceError(unavailable_reason())

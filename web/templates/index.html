@@ -32,7 +32,7 @@
       {% if service_control_available %}
         <span class="status-pill online">AUTOMATIC</span>
         <span style="margin-left:12px;color:var(--fg-mid)">Restoring stops and restarts
-          <code>{{ service_unit }}.service</code> for you.</span>
+          <code>{{ service_target }}</code> for you when it was running.</span>
       {% else %}
         <span class="status-pill offline">MANUAL</span>
         <span style="margin-left:12px;color:var(--fg-mid)">Stop the server yourself before restoring.</span>
